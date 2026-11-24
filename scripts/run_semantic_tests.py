@@ -13,7 +13,8 @@ It runs the files `python -m unittest discover -s tests/semantic` finds (`test*.
 `python -m unittest <module>` from that folder, so a file sees the same import path as under discover. The files can
 run side by side because each one writes only into its own temporary folder; a new test must do the same. With -j 1,
 or on a single core, it runs that discover command itself. Prints the output of every failing file and one summary
-line, and exits 1 if a file fails or none is found. Standard library only.
+line, with the number of skipped tests when there are any (the SPIRV-Tools checks skip on a machine without them),
+and exits 1 if a file fails or none is found. A skip is not a failure. Standard library only.
 """
 import argparse
 import concurrent.futures
@@ -38,12 +39,13 @@ def test_modules(directory, pattern="test*.py"):
 
 
 def run_module(directory, module, verbose):
-    """(return code, tests run, output) of `python -m unittest <module>` run from `directory`."""
+    """(return code, tests run, tests skipped, output) of `python -m unittest <module>` run from `directory`."""
     cmd = [sys.executable, "-m", "unittest", *(["-v"] if verbose else []), module]
     p = subprocess.run(cmd, cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                        errors="replace")
     ran = re.search(r"^Ran (\d+) tests? in", p.stdout, re.M)
-    return p.returncode, int(ran.group(1)) if ran else 0, p.stdout
+    skipped = re.search(r"^(?:OK|FAILED) \(.*\bskipped=(\d+)", p.stdout, re.M)
+    return p.returncode, int(ran.group(1)) if ran else 0, int(skipped.group(1)) if skipped else 0, p.stdout
 
 
 def main(argv=None):
@@ -63,19 +65,22 @@ def main(argv=None):
                                 "-p", a.pattern, *(["-v"] if a.verbose else [])])
     # Largest files first: they tend to run longest, and one started last would set the wall time alone.
     modules.sort(key=lambda m: -os.path.getsize(os.path.join(directory, *m.split(".")) + ".py"))
-    start, total, failed = time.monotonic(), 0, []
+    start, total, skipped, failed = time.monotonic(), 0, 0, []
     with concurrent.futures.ThreadPoolExecutor(a.jobs) as pool:
         jobs = {pool.submit(run_module, directory, m, a.verbose): m for m in modules}
         for job in concurrent.futures.as_completed(jobs):
-            code, ran, out = job.result()
+            code, ran, skips, out = job.result()
             total += ran
+            skipped += skips
             if code:
                 failed.append(jobs[job])
                 print(f"==== FAILED: {jobs[job]}\n{out}", flush=True)
             elif a.verbose:
                 print(f"==== {jobs[job]}\n{out}", flush=True)
     took = time.monotonic() - start
-    summary = f"{len(modules)} files, {total} tests, {len(failed)} files failed in {took:.0f} s with {a.jobs} jobs"
+    skips = f" ({skipped} skipped)" if skipped else ""
+    summary = (f"{len(modules)} files, {total} tests{skips}, {len(failed)} files failed in {took:.0f} s "
+               f"with {a.jobs} jobs")
     print(summary + (": " + ", ".join(sorted(failed)) if failed else ""))
     return 1 if failed else 0
 

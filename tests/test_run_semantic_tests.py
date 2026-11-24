@@ -20,6 +20,8 @@ PASS = "import unittest\nimport helper\nclass T(unittest.TestCase):\n    def tes
        "    def test_b(self): pass\n"
 FAIL = "import unittest\nclass T(unittest.TestCase):\n    def test_a(self): self.assertEqual(1, 2, 'boom-msg')\n"
 BROKEN = "import no_such_module_anywhere\n"
+SKIP = "import unittest\nclass T(unittest.TestCase):\n    @unittest.skip('no tool')\n    def test_a(self): pass\n" \
+       "    def test_b(self): self.skipTest('no tool')\n"
 
 
 def suite(tmp, files):
@@ -107,6 +109,13 @@ class RunnerTest(unittest.TestCase):
             code, out = run(tmp, "-j", "2")
             self.assertEqual(code, 0, out)
             self.assertIn("2 files, 4 tests, 0 files failed", out)
+
+    def test_skips_pass_and_are_counted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            suite(tmp, {"helper.py": "X = 1\n", "test_p.py": PASS, "test_s.py": SKIP})
+            code, out = run(tmp, "-j", "2")
+            self.assertEqual(code, 0, out)
+            self.assertIn("2 files, 4 tests (2 skipped), 0 files failed", out)
 
     def test_a_failure_or_import_error_is_reported_and_fails_the_run(self):
         with tempfile.TemporaryDirectory() as tmp:
